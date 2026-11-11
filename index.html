@@ -57,6 +57,8 @@ select{flex:1;min-width:0;font:600 .85rem/1.2 var(--body);color:var(--ink);backg
 .habit{margin:0;font-family:var(--display);font-style:italic;font-size:.98rem;line-height:1.3;color:var(--ink-soft)}
 .bar.sun{position:relative;overflow:visible;background:linear-gradient(90deg,rgba(239,230,207,.12),rgba(240,200,106,.3),rgba(239,230,207,.12))}
 .bar.sun b{position:absolute;top:50%;width:10px;height:10px;margin:-5px 0 0 -5px;border-radius:50%;background:#f0c86a;left:50%}
+.check{display:flex;align-items:center;gap:8px;font-size:.8rem;color:var(--ink-soft);cursor:pointer}
+.check input{accent-color:#9fbd57;width:16px;height:16px;margin:0}
 .camtext{display:flex;flex-direction:column;gap:4px;min-width:0}
 .status{font-size:.8rem;line-height:1.4;color:var(--ink-soft);margin:0}
 .row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
@@ -126,6 +128,7 @@ video{width:96px;height:72px;object-fit:cover;transform:scaleX(-1);border-radius
     <button id="fastBtn" type="button" aria-pressed="false">Grow faster</button>
     <button id="resetBtn" type="button">Plant a new seed</button>
   </div>
+  <label class="check" for="autoSeed"><input type="checkbox" id="autoSeed" checked> Plant a new seed when fully grown</label>
   <div class="row"><button class="hidebtn" id="hideBtn" type="button">Hide panel</button></div>
 </section>
 <button id="showBtn" type="button" hidden>Show panel</button>
@@ -555,7 +558,7 @@ const TYPES = {
 };
 const NB = 120;
 const freshMem = () => ({ p: 0.02, f: 0, bins: new Array(NB).fill(0), fd: [], sd: [] });
-const S = { type: "flower", mem: {}, light: 0.72, motion: 0, leanTarget: 0.4, lightDir: 0.4, fast: false, tip: null, bloom: 0, rain: 0, rainLeft: 0, wet: 0 };
+const S = { autoSeed: true, fullT: 0, type: "flower", mem: {}, light: 0.72, motion: 0, leanTarget: 0.4, lightDir: 0.4, fast: false, tip: null, bloom: 0, rain: 0, rainLeft: 0, wet: 0 };
 for (const k in TYPES) S.mem[k] = freshMem();
 try {
   const ty = localStorage.getItem("jungle-seedling-type"); if (TYPES[ty]) S.type = ty;
@@ -563,6 +566,7 @@ try {
     const m = JSON.parse(localStorage.getItem("jungle-seedling-" + k) || "null");
     if (m && m.p >= 0 && m.p <= 1 && Array.isArray(m.bins) && m.bins.length === NB) S.mem[k] = Object.assign(freshMem(), m);
   }
+  if (localStorage.getItem("jungle-seedling-autoseed") === "0") S.autoSeed = false;
   const d = parseFloat(localStorage.getItem("jungle-seedling-light")); if (d >= -1 && d <= 1) S.lightDir = S.leanTarget = d;
 } catch (e) {}
 const M = () => S.mem[S.type];
@@ -1187,51 +1191,73 @@ const MP = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
 const MODELS = "https://storage.googleapis.com/mediapipe-models/";
 let det = null, detLoading = false, lastDet = 0, drinkT = 0, lastMouth = null;
 const setDrinkStatus = s => { const el = document.getElementById("drinkStatus"); if (el) el.textContent = s; };
+const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+const frameCv = document.createElement("canvas"), frameCtx = frameCv.getContext("2d");
+let detErr = 0;
 async function loadDetectors() {
   if (det || detLoading) return; detLoading = true;
   setDrinkStatus("Loading drink detection…");
   try {
     const v = await import(MP + "/vision_bundle.mjs");
     const fs = await v.FilesetResolver.forVisionTasks(MP + "/wasm");
+    // iPhones and iPads run the models on the CPU: the GPU path is unreliable in Safari
     const mk = async (Cls, path, extra) => {
       const opts = d => ({ baseOptions: { modelAssetPath: MODELS + path, delegate: d }, runningMode: "VIDEO", ...extra });
+      if (isIOS) return await Cls.createFromOptions(fs, opts("CPU"));
       try { return await Cls.createFromOptions(fs, opts("GPU")); } catch (e) { return await Cls.createFromOptions(fs, opts("CPU")); }
     };
+    setDrinkStatus("Loading drink detection… (1 of 3)");
     const face = await mk(v.FaceLandmarker, "face_landmarker/face_landmarker/float16/1/face_landmarker.task", { numFaces: 1 });
-    const hands = await mk(v.HandLandmarker, "hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task", { numHands: 2 });
+    setDrinkStatus("Loading drink detection… (2 of 3)");
     const objs = await mk(v.ObjectDetector, "object_detector/efficientdet_lite0/float16/1/efficientdet_lite0.tflite",
-      { scoreThreshold: 0.2, maxResults: 5, categoryAllowlist: ["bottle", "cup", "wine glass"] });
+      { scoreThreshold: 0.15, maxResults: 5, categoryAllowlist: ["bottle", "cup", "wine glass"] });
+    setDrinkStatus("Loading drink detection… (3 of 3)");
+    const hands = await mk(v.HandLandmarker, "hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task", { numHands: 2 });
     det = { face, hands, objs };
     setDrinkStatus("Drink from a bottle, glass or cup and it starts to rain.");
   } catch (e) {
-    setDrinkStatus("Drink detection could not load. It needs an internet connection. The rain button still works.");
+    setDrinkStatus("Drink detection could not load (" + (e && e.message ? e.message.slice(0, 60) : "unknown error") + "). The rain button still works.");
   }
   detLoading = false;
 }
+let detTs = 0;
+const seen = { face: false, hand: false, cup: false };
 function detectDrinking(now) {
-  if (!det || !camOn || video.readyState < 2 || now - lastDet < 150) return;
+  if (!det || !camOn || video.readyState < 2 || now - lastDet < (isIOS ? 220 : 150)) return;
   const dt = Math.min(0.5, (now - lastDet) / 1000); lastDet = now;
   let drinking = false;
   try {
-    const f = det.face.detectForVideo(video, now).faceLandmarks?.[0];
+    // hand the models a plain canvas frame: steadier across browsers than the video element itself
+    const vw = video.videoWidth || 320, vh = video.videoHeight || 240;
+    if (frameCv.width !== vw || frameCv.height !== vh) { frameCv.width = vw; frameCv.height = vh; }
+    frameCtx.drawImage(video, 0, 0, vw, vh);
+    detTs = Math.max(detTs + 1, Math.round(now));
+    const f = det.face.detectForVideo(frameCv, detTs).faceLandmarks?.[0];
+    seen.face = !!f;
     if (f) lastMouth = { x: (f[13].x + f[14].x) / 2, y: (f[13].y + f[14].y) / 2, fw: Math.hypot(f[234].x - f[454].x, f[234].y - f[454].y), at: now };
-    const m = lastMouth && now - lastMouth.at < 1500 ? lastMouth : null;   // a cup can hide the mouth for a moment
+    const m = lastMouth && now - lastMouth.at < 3000 ? lastMouth : null;   // a cup can hide the face for a moment
+    seen.cup = false; seen.hand = false;
     if (m) {
-      const hs = det.hands.detectForVideo(video, now).landmarks || [];
-      const handNear = hs.some(h => h.some(q => Math.hypot(q.x - m.x, q.y - m.y) < m.fw * 0.75));
-      if (handNear) {
-        const vw = video.videoWidth || 1, vh = video.videoHeight || 1, pad = m.fw * 0.2;
-        const os = det.objs.detectForVideo(video, now).detections || [];
-        drinking = os.some(o => {
-          const b = o.boundingBox, x0 = b.originX / vw, y0 = b.originY / vh, x1 = x0 + b.width / vw, y1 = y0 + b.height / vh;
-          return m.x > x0 - pad && m.x < x1 + pad && m.y > y0 - pad && m.y < y1 + pad;
-        });
+      const os = det.objs.detectForVideo(frameCv, detTs).detections || [];
+      const pad = m.fw * 0.35;
+      seen.cup = os.some(o => {
+        const b = o.boundingBox, x0 = b.originX / vw, y0 = b.originY / vh, x1 = x0 + b.width / vw, y1 = y0 + b.height / vh;
+        return m.x > x0 - pad && m.x < x1 + pad && m.y > y0 - pad && m.y < y1 + pad;
+      });
+      if (seen.cup) {
+        const hs = det.hands.detectForVideo(frameCv, detTs).landmarks || [];
+        seen.hand = hs.some(h => h.some(q => Math.hypot(q.x - m.x, q.y - m.y) < m.fw * 1.1));
       }
+      drinking = seen.cup;   // a bottle, glass or cup at the mouth is the sign; a hand near it only confirms it
     }
-  } catch (e) {}
-  drinkT = drinking ? drinkT + dt : Math.max(0, drinkT - dt * 2);
-  if (drinkT > 0.6) { startRain(2.5); setDrinkStatus("Cheers. It rains while you drink."); }
-  else if (S.rainLeft <= 0 && drinkT === 0 && det) setDrinkStatus("Drink from a bottle, glass or cup and it starts to rain.");
+    detErr = 0;
+  } catch (e) {
+    if (++detErr === 5) setDrinkStatus("Drink detection stopped working in this browser. The rain button still works.");
+    return;
+  }
+  drinkT = drinking ? drinkT + dt * (seen.hand ? 1.5 : 1) : Math.max(0, drinkT - dt * 2);
+  if (drinkT > 0.5) { startRain(2.5); setDrinkStatus("Cheers. It rains while you drink."); }
+  else setDrinkStatus("Sees: face " + (seen.face ? "✓" : "–") + " · cup at mouth " + (seen.cup ? "✓" : "–") + " · hand " + (seen.hand ? "✓" : "–"));
 }
 function startRain(sec) { S.rainLeft = Math.max(S.rainLeft, sec); }
 const drops = Array.from({ length: 320 }, () => ({ x: Math.random(), y: Math.random(), l: 0.6 + Math.random() * 0.8, v: 0.9 + Math.random() * 0.5 }));
@@ -1364,6 +1390,8 @@ const typeSel = ui("plantType");
 function showType() { typeSel.value = S.type; ui("habit").textContent = TYPES[S.type].habit; }
 typeSel.addEventListener("change", () => { if (TYPES[typeSel.value]) { S.type = typeSel.value; showType(); try { localStorage.setItem("jungle-seedling-type", S.type); } catch (e) {} } });
 showType();
+ui("autoSeed").checked = S.autoSeed;
+ui("autoSeed").addEventListener("change", e => { S.autoSeed = e.target.checked; try { localStorage.setItem("jungle-seedling-autoseed", S.autoSeed ? "1" : "0"); } catch (err) {} });
 ui("hideBtn").addEventListener("click", () => { ui("card").hidden = true; ui("showBtn").hidden = false; ui("showBtn").focus(); });
 ui("showBtn").addEventListener("click", () => { ui("card").hidden = false; ui("showBtn").hidden = true; });
 
@@ -1401,6 +1429,8 @@ function frame(now) {
   const food = Math.pow(clamp((S.light * (1 - 0.3 * S.rain) - 0.12) / 0.6), 0.8);
   const rate = (1 / 240) * TYPES[S.type].rate * food * (0.25 + 1.75 * S.motion) * (1 + 1.5 * S.wet) * (S.fast ? 8 : 1);
   mem.p = Math.min(1, mem.p + rate * dt);
+  // once fully grown, the plant stays in bloom for a while, then a new seed starts
+  if (mem.p >= 1 && S.autoSeed) { S.fullT += dt; if (S.fullT > 25) { S.mem[S.type] = freshMem(); S.fullT = 0; } } else S.fullT = 0;
 
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
   drawSky(t);
