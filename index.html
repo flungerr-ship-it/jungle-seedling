@@ -897,8 +897,14 @@ function drawOrchid(t, p, mem) {
 
 function drawPlant(t) {
   const mem = M(), p = mem.p;
+  // the whole plant is drawn larger, scaled up from its foot, so the grown plant fills much of the picture
+  const k = PLANT_SCALE[S.type] || 1.3, ox = W / 2, oy = H * 0.965;
+  ctx.save(); ctx.translate(ox, oy); ctx.scale(k, k); ctx.translate(-ox, -oy);
   ({ flower: drawFlowerPlant, monstera: drawMonstera, fern: drawFern, rhodo: drawRhodo, orchid: drawOrchid })[S.type](t, p, mem);
+  ctx.restore();
+  if (S.tip) S.tip = [ox + (S.tip[0] - ox) * k, oy + (S.tip[1] - oy) * k];
 }
+const PLANT_SCALE = { flower: 1.25, monstera: 1.4, fern: 1.5, rhodo: 1.45, orchid: 1.35 };
 function stageOf(type, p) {
   if (type === "monstera") return p < 0.3 ? "Juvenile leaves" : p < 0.55 ? "First holes" : p < 0.9 ? "Split adult leaves" : "Flowering";
   if (type === "orchid") return p < 0.48 ? "Growing leaves" : p < 0.76 ? "Flower spike" : p < 0.83 ? "Buds swelling" : p < 0.999 ? "Opening, base first" : "In bloom";
