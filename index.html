@@ -589,7 +589,7 @@ function stemPath(mem, grown, maxH, k = 0.32) {
 
 const NODES = 11;
 function drawFlowerPlant(t, p, mem) {
-  const maxH = H * 0.66, baseX = W / 2, baseY = H * 0.965, stir = stirOf();
+  const maxH = H * 0.5, baseX = W / 2, baseY = H * 0.965, stir = stirOf();
   const grown = maxH * ease((p - 0.02) / 0.72) + H * 0.025;
   const wob = reduceMotion ? 0 : Math.sin(t * 0.9) * 0.025 * stir;
   const bx = stemPath(mem, grown, maxH);
@@ -643,7 +643,7 @@ function drawFlowerPlant(t, p, mem) {
 }
 
 function drawMonstera(t, p, mem) {
-  const maxH = H * 0.6, baseX = W / 2, baseY = H * 0.965, stir = stirOf();
+  const maxH = H * 0.5, baseX = W / 2, baseY = H * 0.965, stir = stirOf();
   const grown = maxH * ease((p - 0.02) / 0.86) + H * 0.02;
   const wob = reduceMotion ? 0 : Math.sin(t * 0.8) * 0.02 * stir;
   const bx = stemPath(mem, grown, maxH);
@@ -870,7 +870,7 @@ function drawOrchid(t, p, mem) {
   S.tip = null; S.bloom = 0;
   const sp = ease((p - 0.48) / 0.3); if (sp <= 0) return;
   if (mem.sd[0] === undefined || mem.sd[0] === null) mem.sd[0] = S.lightDir >= 0 ? 1 : -1;
-  const dir = mem.sd[0], Lmax = H * 0.42, L = Lmax * sp, n = 40, ds = L / n;
+  const dir = mem.sd[0], Lmax = H * 0.3, L = Lmax * sp, n = 40, ds = L / n;
   const sway = reduceMotion ? 0 : Math.sin(t * 0.8) * 0.03 * stir;
   const start = [crown[0] + dir * U * 10, crown[1] + U * 6];
   const pts = []; let th = -Math.PI / 2 + dir * 0.1, x = start[0], y = start[1];
@@ -904,7 +904,7 @@ function drawPlant(t) {
   ctx.restore();
   if (S.tip) S.tip = [ox + (S.tip[0] - ox) * k, oy + (S.tip[1] - oy) * k];
 }
-const PLANT_SCALE = { flower: 1.25, monstera: 1.4, fern: 1.5, rhodo: 1.45, orchid: 1.35 };
+const PLANT_SCALE = { flower: 1.6, monstera: 1.75, fern: 1.95, rhodo: 1.85, orchid: 1.7 };
 function stageOf(type, p) {
   if (type === "monstera") return p < 0.3 ? "Juvenile leaves" : p < 0.55 ? "First holes" : p < 0.9 ? "Split adult leaves" : "Flowering";
   if (type === "orchid") return p < 0.48 ? "Growing leaves" : p < 0.76 ? "Flower spike" : p < 0.83 ? "Buds swelling" : p < 0.999 ? "Opening, base first" : "In bloom";
